@@ -98,6 +98,30 @@ test('invalid session and room objects return 400 without reaching Redis', async
   assert.equal((await guest.request('ice', { room: { toString: null } })).status, 400);
 });
 
+test('stops reading oversized chat requests without a Content-Length header', async () => {
+  let chunks = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (chunks === 3) {
+        controller.close();
+        return;
+      }
+      chunks += 1;
+      controller.enqueue(new Uint8Array(25000));
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const handler = createChatHandler({
+    development: true,
+    redis: async () => assert.fail('An oversized request must never reach Redis.'),
+  });
+  const response = await handler(new Request('http://localhost/api/chat', { method: 'POST', body, duplex: 'half' }));
+  assert.equal(response.status, 413);
+  assert.equal(chunks, 2);
+  assert.equal(cancelled, true);
+});
+
 test('participant departure is retry-safe and a repeated report can block a rematch',
   { skip: !process.env.TEST_REDIS_URL && 'Set TEST_REDIS_URL to run the Redis integration test.' }, async (t) => {
     const redis = new Redis(process.env.TEST_REDIS_URL, { maxRetriesPerRequest: 1, connectTimeout: 1500 });

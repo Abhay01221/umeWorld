@@ -10,6 +10,31 @@ const languages = new Set(['', 'en', 'es', 'pt', 'fr', 'ja', 'ko', 'de', 'hi', '
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const reportReasons = new Set(['explicit', 'child-safety', 'harassment', 'spam', 'impersonation', 'violence', 'other']);
+const maxBodyBytes = 48000;
+
+async function readBody(request) {
+  if (Number(request.headers.get('content-length')) > maxBodyBytes) return null;
+  if (!request.body) return '';
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return text + decoder.decode();
+      bytes += value.byteLength;
+      if (bytes > maxBodyBytes) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 function isId(value) {
   return typeof value === 'string' && uuid.test(value);
@@ -95,13 +120,10 @@ export function createChatHandler({ env = process.env, redis = createRedis(env),
       return json({ error: 'The chat service is being set up. Please try again later.' }, 503);
     }
 
-    let text, body;
+    let body;
     try {
-      if (Number(request.headers.get('content-length')) > 48000) {
-        return json({ error: 'The request is too large.' }, 413);
-      }
-      text = await request.text();
-      if (Buffer.byteLength(text, 'utf8') > 48000) return json({ error: 'The request is too large.' }, 413);
+      const text = await readBody(request);
+      if (text === null) return json({ error: 'The request is too large.' }, 413);
       body = JSON.parse(text);
     } catch {
       return json({ error: 'Invalid request.' }, 400);

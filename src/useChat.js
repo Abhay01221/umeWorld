@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 const endpoint = '/api/chat';
 const messagesPerWindow = 20;
 const messageWindowMs = 5000;
+const connectedPollGraceMs = 25000;
 
 async function request(action, fields = {}) {
   const response = await fetch(endpoint, {
@@ -15,6 +16,20 @@ async function request(action, fields = {}) {
   if (!data || typeof data !== 'object') throw Object.assign(new Error('The chat service is unavailable.'), { status: response.status });
   if (!response.ok) throw Object.assign(new Error(data.error || 'The chat service is unavailable.'), { status: response.status });
   return data;
+}
+
+function isTemporaryFailure(error) {
+  return !error.status || error.status === 408 || error.status >= 500;
+}
+
+async function requestWithRetry(action, fields) {
+  try {
+    return await request(action, fields);
+  } catch (error) {
+    if (!isTemporaryFailure(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return request(action, fields);
+  }
 }
 
 function acceptMessage(bucket, now) {
@@ -97,7 +112,11 @@ export function useChat() {
   const syncCamera = useCallback(() => {
     const channel = current.current?.channel;
     if (channel?.readyState === 'open') {
-      channel.send(JSON.stringify({ type: 'camera', enabled: stream.current?.getVideoTracks().some((track) => track.enabled && track.readyState === 'live') || false }));
+      try {
+        channel.send(JSON.stringify({ type: 'camera', enabled: stream.current?.getVideoTracks().some((track) => track.enabled && track.readyState === 'live') || false }));
+      } catch {
+        // Losing a camera notification should not interrupt local camera controls.
+      }
     }
   }, []);
 
@@ -164,7 +183,7 @@ export function useChat() {
 
   const refreshPresence = useCallback(() => {
     if (bootstrap.current) return bootstrap.current;
-    const pending = request('status').then((data) => {
+    const pending = requestWithRetry('status').then((data) => {
       setOnline(data.online);
       setPresenceError(false);
       setCountry(data.country);
@@ -186,12 +205,9 @@ export function useChat() {
       if (document.visibilityState === 'visible' || current.current) void refreshPresence().catch(() => {});
     }, 20000);
     navigator.mediaDevices?.addEventListener('devicechange', refreshDevices);
+    const onOnline = () => void refreshPresence().catch(() => {});
     const onHide = () => {
       const call = current.current;
-      if (!call) {
-        stopMedia();
-        return;
-      }
       lifecycle.current += 1;
       current.current = null;
       closePeer(call);
@@ -200,12 +216,14 @@ export function useChat() {
       setRemote(null);
       setMatch(null);
       setCanMessage(false);
-      navigator.sendBeacon(endpoint, JSON.stringify({ action: 'leave', session: call.id }));
+      if (call) navigator.sendBeacon?.(endpoint, JSON.stringify({ action: 'leave', session: call.id }));
     };
+    window.addEventListener('online', onOnline);
     window.addEventListener('pagehide', onHide);
     return () => {
       clearInterval(timer);
       navigator.mediaDevices?.removeEventListener('devicechange', refreshDevices);
+      window.removeEventListener('online', onOnline);
       window.removeEventListener('pagehide', onHide);
     };
   }, [refreshDevices, refreshPresence, stopMedia]);
@@ -293,7 +311,7 @@ export function useChat() {
     setMatch(information);
     setLastMatch(information);
     setPhase('connecting');
-    const { iceServers } = await request('ice', { session: call.id, room: call.room });
+    const { iceServers } = await requestWithRetry('ice', { session: call.id, room: call.room });
     if (current.current !== call) return;
     const pc = new RTCPeerConnection({ iceServers });
     call.pc = pc;
@@ -359,10 +377,12 @@ export function useChat() {
       data = await (preferences ? request('join', { session: call.id, ...preferences }) :
         request('poll', { session: call.id, cursor: call.cursor }));
       call.failures = 0;
+      call.lastPollSuccess = Date.now();
     } catch (error) {
       if (current.current !== call) return;
-      if ((!error.status || error.status >= 500) && ++call.failures <= 3) {
-        call.timer = setTimeout(() => void poll(call, preferences), 1250);
+      const canRetry = call.connected ? Date.now() - call.lastPollSuccess < connectedPollGraceMs : ++call.failures <= 3;
+      if (isTemporaryFailure(error) && canRetry) {
+        call.timer = setTimeout(() => void poll(call, preferences), call.connected ? 2500 : 1250);
       } else {
         void end(error.status ? error.message : 'The service could not be reached. Check your connection and try again.');
       }
