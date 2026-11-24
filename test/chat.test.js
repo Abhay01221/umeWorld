@@ -60,6 +60,30 @@ test('rejects a STUN-only production result and keeps valid relay credentials', 
   ]);
 });
 
+test('uses short-lived Xirsys credentials in preference to Cloudflare when both are configured', async (t) => {
+  const { CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_API_TOKEN, ...baseEnv } = marketplaceEnv;
+  const xirsys = { ...baseEnv, XIRSYS_IDENT: 'demo', XIRSYS_SECRET: 'relay-fixture', XIRSYS_CHANNEL: 'ume world' };
+  assert.deepEqual(configurationIssues(xirsys), []);
+  assert.equal(configurationIssues({ ...xirsys, XIRSYS_SECRET: '' }).length, 1);
+
+  const iceServers = [{
+    urls: ['stun:turn.example.com', 'turns:turn.example.com:443?transport=tcp'],
+    username: 'temporary-user', credential: 'temporary-password',
+  }];
+  const request = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://global.xirsys.net/_turn/ume%20world?webrtc=1&expire=21600');
+    assert.equal(options.method, 'PUT');
+    assert.equal(options.headers.Authorization, `Basic ${Buffer.from('demo:relay-fixture').toString('base64')}`);
+    return Response.json({ s: 'ok', v: { iceServers } });
+  });
+  assert.deepEqual(await getIceServers({ ...xirsys, CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_TURN_API_TOKEN }), [
+    { urls: [iceServers[0].urls[0]] },
+    { ...iceServers[0], urls: [iceServers[0].urls[1]] },
+  ]);
+  request.mock.mockImplementation(async () => Response.json({ s: 'error' }));
+  await assert.rejects(getIceServers(xirsys), /Xirsys could not issue TURN credentials/);
+});
+
 test('invalid session and room objects return 400 without reaching Redis', async () => {
   const handler = createChatHandler({
     development: true,

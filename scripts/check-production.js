@@ -15,7 +15,7 @@ if (issues.length) {
     }),
     getIceServers(process.env),
   ]);
-  const services = ['Redis connection and Lua scripting', 'Cloudflare TURN credential issuance'];
+  const services = ['Redis connection and Lua scripting', 'TURN credential issuance'];
   for (const [index, result] of results.entries()) {
     if (result.status === 'fulfilled') {
       console.log(`Passed: ${services[index]}`);
