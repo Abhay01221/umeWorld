@@ -276,12 +276,15 @@ function Stage({ chat, mode, volume, setVolume, open, doStart, doNext, armed, ca
   }
   let heading = 'Ready to meet someone?';
   let detail = 'Start matching to connect with a stranger.';
-  if (phase === 'preparing') { heading = 'Getting things ready'; detail = 'Allow device access to continue.'; }
-  if (phase === 'waiting') { heading = 'Looking for a match'; detail = 'Waiting for someone to join.'; }
+  if (phase === 'preparing') {
+    heading = mode === 'text' ? 'Starting text chat' : 'Getting things ready';
+    detail = mode === 'text' ? '' : 'Allow device access to continue.';
+  }
+  if (phase === 'waiting') { heading = 'Looking for a match'; detail = mode === 'text' ? 'Waiting for someone else to start Text chat.' : 'Waiting for someone to join.'; }
   if (phase === 'connecting') { heading = 'Connecting you'; detail = 'Setting up your conversation.'; }
   if (active) {
     heading = mode === 'text' ? 'You’re connected' : mode === 'voice' ? 'Voice chat is live' : 'Their camera is off';
-    detail = mode === 'text' ? 'Open Messages to say hello.' : mode === 'voice' ? 'Use your microphone to say hello.' : 'You can keep talking or send a message.';
+    detail = mode === 'text' ? 'Send a message to say hello.' : mode === 'voice' ? 'Use your microphone to say hello.' : 'You can keep talking or send a message.';
   }
   return <section className="call-card" aria-label={modes[mode].title}>
     <div className={`stage ${mode}-stage`}>
@@ -295,7 +298,7 @@ function Stage({ chat, mode, volume, setVolume, open, doStart, doNext, armed, ca
           <span className="orbit-accent" />
           <div className="orbital-core">{mode === 'video' ? <Globe2 /> : mode === 'voice' ? <AudioLines /> : <MessageCircle />}</div>
         </div>
-        <h2>{heading}</h2><p>{detail}</p>
+        <h2>{heading}</h2>{detail && <p>{detail}</p>}
         {phase === 'waiting' && cancelFilters && <button className="button match-anyone" onClick={cancelFilters}>Match with anyone</button>}
         {active && match?.shared && <span className="shared-interest"><Sparkles size={14} /> Shared interest · {match.shared}</span>}
       </div>}
@@ -438,7 +441,7 @@ function App() {
         <div><h1>{modes[mode].title}</h1><p>{modes[mode].description}</p></div>
         <button type="button" className="button help-button" onClick={() => setModal('rules')}><ShieldCheck size={17} /> <span>Community rules</span></button>
       </div>
-      <div className="workspace">
+      <div className="workspace" data-mode={mode}>
         <Stage chat={chat} mode={mode} volume={volume} setVolume={setVolume} open={openDialog} doStart={() => start()} doNext={next} armed={armed}
           cancelFilters={(interests.length || sameCountry || language) ? () => {
             void chat.end('', { keepMedia: true });

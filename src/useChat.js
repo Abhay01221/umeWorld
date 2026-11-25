@@ -248,12 +248,14 @@ export function useChat() {
 
   function attachChannel(call, channel) {
     call.channel = channel;
-    channel.onopen = () => {
+    const onOpen = () => {
       if (current.current !== call) return;
+      channel.onopen = null;
       setCanMessage(true);
       connected(call);
-      syncCamera();
+      if (call.mode !== 'text') syncCamera();
     };
+    channel.onopen = onOpen;
     channel.onclose = () => {
       if (current.current === call) setCanMessage(false);
     };
@@ -271,6 +273,7 @@ export function useChat() {
         // Ignore malformed messages from a peer.
       }
     };
+    if (channel.readyState === 'open') onOpen();
   }
 
   function sendSignal(call, signal) {
@@ -330,7 +333,7 @@ export function useChat() {
     pc.onconnectionstatechange = () => {
       if (current.current !== call) return;
       clearTimeout(call.disconnectTimer);
-      if (pc.connectionState === 'connected') connected(call);
+      if (pc.connectionState === 'connected' && call.mode !== 'text') connected(call);
       if (pc.connectionState === 'failed') void end('The connection dropped. Start a new chat to try again.');
       if (pc.connectionState === 'disconnected') {
         call.disconnectTimer = setTimeout(() => {
@@ -428,7 +431,7 @@ export function useChat() {
       await Promise.all([presence, stopping.current]);
       if (version !== lifecycle.current) return;
       const call = {
-        id: crypto.randomUUID(), cursor: 0, failures: 0, candidates: [], send: Promise.resolve(),
+        id: crypto.randomUUID(), mode: preferences.mode, cursor: 0, failures: 0, candidates: [], send: Promise.resolve(),
         incoming: { count: 0, resetAt: 0 }, outgoing: { count: 0, resetAt: 0 },
       };
       current.current = call;

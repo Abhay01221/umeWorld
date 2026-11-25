@@ -510,6 +510,13 @@ input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color:
   .stage { --stage-height: clamp(335px, 53vh, 510px); }
   .setup { padding-left: 18px; padding-right: 18px; }
   .message-list { min-height: 260px; max-height: 420px; }
+  .stage.text-stage { --stage-height: 0px; }
+  .text-stage .stage-empty { padding: 46px 12px 16px; }
+  .text-stage .orbital { display: none; }
+  .workspace[data-mode="text"] .sidebar,
+  .workspace[data-mode="text"] .messages { min-height: 0; }
+  .workspace[data-mode="text"] .message-list { flex: none; height: clamp(80px, 16vh, 150px); min-height: 0; }
+  .workspace[data-mode="text"] .composer input { font-size: 1rem; }
 }
 @media (max-width: 540px) {
   .header-inner, .layout, .footer-inner { width: calc(100% - 26px); }
