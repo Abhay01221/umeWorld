@@ -49,6 +49,18 @@ function mediaError(error) {
   return error.message || 'Could not access your camera or microphone.';
 }
 
+function mediaConstraints(kinds, deviceIds) {
+  return Object.fromEntries(kinds.map((kind) => {
+    const deviceId = deviceIds[kind];
+    return [kind, {
+      ...(deviceId && { deviceId: { exact: deviceId } }),
+      ...(kind === 'video' ? {
+        width: { ideal: 960 }, height: { ideal: 540 }, ...(!deviceId && { facingMode: 'user' }),
+      } : { echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
+    }];
+  }));
+}
+
 function closePeer(call) {
   if (!call) return;
   clearTimeout(call.timer);
@@ -120,66 +132,80 @@ export function useChat() {
     }
   }, []);
 
+  const installMedia = useCallback(async (fresh, version) => {
+    if (version !== mediaVersion.current) {
+      fresh.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    const tracks = stream.current?.getTracks() ?? [];
+    for (const track of fresh.getTracks()) {
+      const old = tracks.find((previous) => previous.kind === track.kind);
+      const sender = current.current?.pc?.getSenders().find((item) => item.track?.kind === track.kind);
+      track.enabled = old?.enabled ?? true;
+      try {
+        if (sender) await sender.replaceTrack(track);
+      } catch (error) {
+        fresh.getTracks().forEach((item) => item.stop());
+        throw error;
+      }
+      if (version !== mediaVersion.current) {
+        fresh.getTracks().forEach((item) => item.stop());
+        return;
+      }
+      if (old) {
+        old.stop();
+        tracks.splice(tracks.indexOf(old), 1);
+      }
+      tracks.push(track);
+      track.addEventListener('ended', () => {
+        if (!stream.current?.getTracks().includes(track)) return;
+        if (track.kind === 'video') setCamera(false);
+        else setMic(false);
+        syncCamera();
+      });
+    }
+    stream.current = new MediaStream(tracks);
+    setLocal(stream.current);
+    setCamera(tracks.some((track) => track.kind === 'video' && track.enabled && track.readyState === 'live'));
+    setMic(tracks.some((track) => track.kind === 'audio' && track.enabled && track.readyState === 'live'));
+    syncCamera();
+    void refreshDevices();
+  }, [refreshDevices, syncCamera]);
+
   const acquire = useCallback(async (kinds, overrides = {}) => {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera and microphone access requires HTTPS or localhost.');
     if (acquiring.current) throw new Error('Your browser is already checking camera or microphone access.');
     const version = mediaVersion.current;
     const need = kinds.filter((kind) => !stream.current?.getTracks().some((track) => track.kind === kind && track.readyState === 'live') || kind in overrides);
     if (!need.length) return;
+    const previousCamera = Object.hasOwn(overrides, 'video') && stream.current?.getVideoTracks().find((track) => track.readyState === 'live');
+    const previousCameraId = previousCamera && (previousCamera.getSettings().deviceId || selected.current.video);
+    if (overrides.video && previousCameraId === overrides.video) return;
     acquiring.current = true;
     setMediaBusy(true);
     try {
-      const constraints = Object.fromEntries(need.map((kind) => {
-        const deviceId = overrides[kind] ?? selected.current[kind];
-        return [kind, {
-          ...(deviceId && { deviceId: { exact: deviceId } }),
-          ...(kind === 'video' ? { width: { ideal: 960 }, height: { ideal: 540 }, facingMode: 'user' } :
-            { echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
-        }];
-      }));
-      const fresh = await navigator.mediaDevices.getUserMedia(constraints);
-      if (version !== mediaVersion.current) {
-        fresh.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      const tracks = stream.current?.getTracks() ?? [];
-      for (const track of fresh.getTracks()) {
-        const old = tracks.find((previous) => previous.kind === track.kind);
-        const sender = current.current?.pc?.getSenders().find((item) => item.track?.kind === track.kind);
+      // Some phones can capture from only one camera at a time. Keep the existing sender and microphone.
+      if (previousCamera) previousCamera.stop();
+      const fresh = await navigator.mediaDevices.getUserMedia(mediaConstraints(need, { ...selected.current, ...overrides }));
+      await installMedia(fresh, version);
+    } catch (error) {
+      if (previousCamera && version === mediaVersion.current) {
         try {
-          if (sender) await sender.replaceTrack(track);
-        } catch (error) {
-          fresh.getTracks().forEach((item) => item.stop());
-          throw error;
+          const restored = await navigator.mediaDevices.getUserMedia(mediaConstraints(['video'], { video: previousCameraId }));
+          await installMedia(restored, version);
+        } catch {
+          if (version === mediaVersion.current) {
+            setCamera(false);
+            syncCamera();
+          }
         }
-        if (version !== mediaVersion.current) {
-          fresh.getTracks().forEach((item) => item.stop());
-          return;
-        }
-        track.enabled = old?.enabled ?? true;
-        if (old) {
-          old.stop();
-          tracks.splice(tracks.indexOf(old), 1);
-        }
-        tracks.push(track);
-        track.addEventListener('ended', () => {
-          if (!stream.current?.getTracks().includes(track)) return;
-          if (track.kind === 'video') setCamera(false);
-          else setMic(false);
-          syncCamera();
-        });
       }
-      stream.current = new MediaStream(tracks);
-      setLocal(stream.current);
-      setCamera(tracks.some((track) => track.kind === 'video' && track.enabled && track.readyState === 'live'));
-      setMic(tracks.some((track) => track.kind === 'audio' && track.enabled && track.readyState === 'live'));
-      syncCamera();
-      void refreshDevices();
+      throw error;
     } finally {
       acquiring.current = false;
       setMediaBusy(false);
     }
-  }, [refreshDevices, syncCamera]);
+  }, [installMedia, syncCamera]);
 
   const refreshPresence = useCallback(() => {
     if (bootstrap.current) return bootstrap.current;
