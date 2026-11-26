@@ -4,7 +4,7 @@ import { createRedis, redisNamespace } from './storage.js';
 import { matchmaking } from './matchmaking.js';
 import { getIceServers } from './turn.js';
 
-const actions = new Set(['status', 'join', 'poll', 'leave', 'signal', 'report', 'ice']);
+const actions = new Set(['status', 'presence-offline', 'join', 'poll', 'leave', 'signal', 'report', 'ice']);
 const modes = new Set(['video', 'voice', 'text']);
 const languages = new Set(['', 'en', 'es', 'pt', 'fr', 'ja', 'ko', 'de', 'hi', 'zh', 'th', 'it', 'ar']);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -67,7 +67,8 @@ function validSignal(signal) {
 
 function validate(body, country, ip) {
   switch (body.action) {
-    case 'status': return { country };
+    case 'status': return body.presenceId === undefined || isId(body.presenceId) ? { country, presenceId: body.presenceId } : null;
+    case 'presence-offline': return isId(body.presenceId) ? { presenceId: body.presenceId } : null;
     case 'join': {
       if (!modes.has(body.mode) || body.confirmedAdult !== true || !languages.has(body.language)) return null;
       const interests = Array.isArray(body.interests) ? body.interests.slice(0, 5)
@@ -136,7 +137,7 @@ export function createChatHandler({ env = process.env, redis = createRedis(env),
       const secure = development ? '' : '; Secure';
       headers.set('Set-Cookie', `ume_guest=${guest}.${signature(secret, guest)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=7776000${secure}`);
     }
-    if (body.action !== 'status' && !isId(body.session)) {
+    if (body.action !== 'status' && body.action !== 'presence-offline' && !isId(body.session)) {
       return json({ error: 'Invalid chat session.' }, 400);
     }
     const location = development ? (env.DEVELOPMENT_COUNTRY || 'IN') : request.headers.get('x-vercel-ip-country');

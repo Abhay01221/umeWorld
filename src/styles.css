@@ -456,6 +456,7 @@ kbd { font: 615 .7rem "Inter Variable", sans-serif; border: 1px solid var(--bord
 .how-button { color: var(--muted); min-height: 35px; font-size: .78rem; }
 .how-button svg { color: var(--accent); }
 .notice { margin-top: 12px; border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 10px 12px; color: var(--muted); font-size: .82rem; }
+.devtools-dock-notice { position: fixed; z-index: 10; right: 12px; bottom: 12px; max-width: min(350px, calc(100% - 24px)); box-shadow: var(--shadow); pointer-events: none; }
 
 .footer { border-top: 1px solid var(--border-subtle); background: var(--header); }
 .footer-inner { display: flex; align-items: center; gap: 15px; min-height: 68px; }

@@ -32,6 +32,13 @@ async function requestWithRetry(action, fields) {
   }
 }
 
+function removePresence(presenceId) {
+  const body = JSON.stringify({ action: 'presence-offline', presenceId });
+  if (!navigator.sendBeacon?.(endpoint, body)) {
+    void fetch(endpoint, { method: 'POST', body, keepalive: true }).catch(() => {});
+  }
+}
+
 function acceptMessage(bucket, now) {
   if (now >= bucket.resetAt) {
     bucket.count = 0;
@@ -100,6 +107,9 @@ export function useChat() {
   const mediaVersion = useRef(0);
   const acquiring = useRef(false);
   const bootstrap = useRef(null);
+  const hasGuest = useRef(false);
+  const presence = useRef(null);
+  const pageHidden = useRef(false);
   const lifecycle = useRef(0);
   const stopping = useRef(Promise.resolve());
 
@@ -209,7 +219,13 @@ export function useChat() {
 
   const refreshPresence = useCallback(() => {
     if (bootstrap.current) return bootstrap.current;
-    const pending = requestWithRetry('status').then((data) => {
+    if (!pageHidden.current && (document.visibilityState === 'visible' || current.current)) presence.current ??= crypto.randomUUID();
+    const presenceId = presence.current;
+    const status = () => requestWithRetry('status', presenceId && presence.current === presenceId ? { presenceId } : {});
+    // First visits in multiple tabs must receive the same guest cookie.
+    const pending = (!hasGuest.current && navigator.locks ? navigator.locks.request('umeworld-guest', status) : status()).then((data) => {
+      hasGuest.current = true;
+      if (presenceId && presence.current !== presenceId) removePresence(presenceId);
       setOnline(data.online);
       setPresenceError(false);
       setCountry(data.country);
@@ -225,14 +241,32 @@ export function useChat() {
     return pending;
   }, []);
 
+  const clearPresence = useCallback(() => {
+    const presenceId = presence.current;
+    presence.current = null;
+    if (presenceId) removePresence(presenceId);
+  }, []);
+
   useEffect(() => {
     void refreshPresence().catch(() => {});
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible' || current.current) void refreshPresence().catch(() => {});
     }, 20000);
     navigator.mediaDevices?.addEventListener('devicechange', refreshDevices);
-    const onOnline = () => void refreshPresence().catch(() => {});
+    const refresh = () => void refreshPresence().catch(() => {});
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (bootstrap.current) void bootstrap.current.then(refresh, refresh);
+        else refresh();
+      } else if (!current.current) clearPresence();
+    };
+    const onShow = (event) => {
+      pageHidden.current = false;
+      if (event.persisted) onVisibility();
+    };
     const onHide = () => {
+      pageHidden.current = true;
+      clearPresence();
       const call = current.current;
       lifecycle.current += 1;
       current.current = null;
@@ -244,20 +278,25 @@ export function useChat() {
       setCanMessage(false);
       if (call) navigator.sendBeacon?.(endpoint, JSON.stringify({ action: 'leave', session: call.id }));
     };
-    window.addEventListener('online', onOnline);
+    window.addEventListener('online', refresh);
     window.addEventListener('pagehide', onHide);
+    window.addEventListener('pageshow', onShow);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       clearInterval(timer);
       navigator.mediaDevices?.removeEventListener('devicechange', refreshDevices);
-      window.removeEventListener('online', onOnline);
+      window.removeEventListener('online', refresh);
       window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('pageshow', onShow);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refreshDevices, refreshPresence, stopMedia]);
+  }, [clearPresence, refreshDevices, refreshPresence, stopMedia]);
 
   function end(message = 'You ended the chat.', { keepMedia = false, avoid = false } = {}) {
     lifecycle.current += 1;
     const call = current.current;
     current.current = null;
+    if (document.visibilityState !== 'visible') clearPresence();
     closePeer(call);
     setPhase('idle');
     setMatch(null);

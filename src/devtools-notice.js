@@ -35,3 +35,36 @@ window.addEventListener('keydown', (event) => {
   notice ??= createNotice();
   if (!notice.open) notice.showModal();
 }, { capture: true });
+
+const dockMessage = 'If you opened Inspect or the Console, close it before continuing with UmeWorld.';
+console.info(dockMessage);
+
+function windowSize() {
+  return { width: outerWidth, height: outerHeight, viewportWidth: innerWidth, viewportHeight: innerHeight, scale: devicePixelRatio };
+}
+
+// Docked panels shrink the page without resizing the window. Other sidebars can do this too.
+if (matchMedia('(pointer: fine)').matches) {
+  let baseline = windowSize();
+  let hint;
+  let hintTimer;
+  window.addEventListener('resize', () => {
+    const size = windowSize();
+    const windowChanged = size.width !== baseline.width || size.height !== baseline.height || size.scale !== baseline.scale;
+    const viewportGrew = size.viewportWidth > baseline.viewportWidth || size.viewportHeight > baseline.viewportHeight;
+    if (windowChanged || viewportGrew || document.fullscreenElement) {
+      baseline = size;
+      hint?.remove();
+      return;
+    }
+    if (baseline.viewportWidth - size.viewportWidth < 160 && baseline.viewportHeight - size.viewportHeight < 160) return;
+    baseline = size;
+    hint ??= document.createElement('div');
+    hint.className = 'notice devtools-dock-notice';
+    hint.setAttribute('role', 'status');
+    hint.textContent = dockMessage;
+    document.body.append(hint);
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => hint.remove(), 6500);
+  });
+}

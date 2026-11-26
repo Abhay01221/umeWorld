@@ -122,23 +122,50 @@ test('stops reading oversized chat requests without a Content-Length header', as
   assert.equal(cancelled, true);
 });
 
-test('participant departure is retry-safe and a repeated report can block a rematch',
-  { skip: !process.env.TEST_REDIS_URL && 'Set TEST_REDIS_URL to run the Redis integration test.' }, async (t) => {
-    const redis = new Redis(process.env.TEST_REDIS_URL, { maxRetriesPerRequest: 1, connectTimeout: 1500 });
-    redis.on('error', () => {});
-    const namespace = `umeworld-test:${randomUUID()}:`;
-    t.after(async () => {
-      try {
-        const keys = await redis.keys(namespace + '*');
-        if (keys.length) await redis.del(...keys);
-      } finally {
-        redis.disconnect();
-      }
-    });
-    const handler = createChatHandler({
-      development: true,
-      redis: (command, script, keyCount, _base, ...args) => redis.call(command, script, keyCount, namespace, ...args),
-    });
+const redisTest = { skip: !process.env.TEST_REDIS_URL && 'Set TEST_REDIS_URL to run the Redis integration test.' };
+
+function redisFixture(t, clock = Date.now) {
+  const redis = new Redis(process.env.TEST_REDIS_URL, { maxRetriesPerRequest: 1, connectTimeout: 1500 });
+  redis.on('error', () => {});
+  const namespace = `umeworld-test:${randomUUID()}:`;
+  t.after(async () => {
+    try {
+      const keys = await redis.keys(namespace + '*');
+      if (keys.length) await redis.del(...keys);
+    } finally {
+      redis.disconnect();
+    }
+  });
+  const handler = createChatHandler({
+    development: true,
+    redis: (command, script, keyCount, _base, action, guest, session, _now, data) =>
+      redis.call(command, script, keyCount, namespace, action, guest, session, clock(), data),
+  });
+  return { redis, namespace, handler };
+}
+
+test('presence counts browsers once, removes closed tabs, and expires missed heartbeats', redisTest, async (t) => {
+  let now = Date.now();
+  const { handler } = redisFixture(t, () => now);
+  const alice = client(handler);
+  const bob = client(handler);
+  const firstTab = { presenceId: randomUUID() };
+  const secondTab = { presenceId: randomUUID() };
+  const otherBrowser = { presenceId: randomUUID() };
+  assert.equal((await alice.request('status')).data.online, 0);
+  assert.equal((await alice.request('status', firstTab)).data.online, 1);
+  assert.equal((await alice.request('status', secondTab)).data.online, 1);
+  assert.equal((await bob.request('status', otherBrowser)).data.online, 2);
+  assert.equal((await alice.request('presence-offline', firstTab)).status, 200);
+  assert.equal((await bob.request('status')).data.online, 2);
+  assert.equal((await alice.request('presence-offline', secondTab)).status, 200);
+  assert.equal((await alice.request('status', firstTab)).data.online, 1);
+  now += 36000;
+  assert.equal((await bob.request('status')).data.online, 0);
+});
+
+test('participant departure is retry-safe and a repeated report can block a rematch', redisTest, async (t) => {
+    const { redis, namespace, handler } = redisFixture(t);
     const alice = client(handler);
     const bob = client(handler);
     const preferences = { mode: 'text', confirmedAdult: true, language: '' };

@@ -3,7 +3,7 @@ export const matchmaking = String.raw`
 local base = KEYS[1]
 local action, guest, session, now = ARGV[1], ARGV[2], ARGV[3], tonumber(ARGV[4])
 local data = cjson.decode(ARGV[5])
-local presence = base .. 'online'
+local presence = base .. 'online:v2'
 local selfKey = base .. 'session:' .. session
 local function read(key)
   local value = redis.call('GET', key)
@@ -32,12 +32,35 @@ end
 
 if action == 'status' or action == 'join' or action == 'poll' then
   if isBanned(guest) then return failure(403, 'This browser is restricted from chatting.') end
-  redis.call('ZADD', presence, now, guest)
-  redis.call('EXPIRE', presence, 120)
-  redis.call('ZREMRANGEBYSCORE', presence, '-inf', now - 50000)
+end
+local function presenceKeys(tab)
+  return base .. 'presence-tabs:' .. guest, base .. 'presence-closed:' .. guest .. ':' .. tab
 end
 if action == 'status' then
+  if data.presenceId then
+    local tabs, closed = presenceKeys(data.presenceId)
+    if redis.call('EXISTS', closed) == 0 then
+      local expires = now + 35000
+      redis.call('ZREMRANGEBYSCORE', tabs, '-inf', now)
+      redis.call('ZADD', tabs, expires, data.presenceId)
+      redis.call('EXPIRE', tabs, 45)
+      redis.call('ZADD', presence, 'GT', expires, guest)
+      redis.call('EXPIRE', presence, 60)
+    end
+  end
+  redis.call('ZREMRANGEBYSCORE', presence, '-inf', now)
   return result({online = redis.call('ZCARD', presence), country = data.country})
+end
+if action == 'presence-offline' then
+  local tabs, closed = presenceKeys(data.presenceId)
+  -- A delayed heartbeat must not bring back a tab that already left.
+  redis.call('SETEX', closed, 45, '1')
+  redis.call('ZREM', tabs, data.presenceId)
+  redis.call('ZREMRANGEBYSCORE', tabs, '-inf', now)
+  local remaining = redis.call('ZRANGE', tabs, -1, -1, 'WITHSCORES')
+  if remaining[2] then redis.call('ZADD', presence, remaining[2], guest)
+  else redis.call('ZREM', presence, guest) end
+  return result({ok = true})
 end
 
 local self = read(selfKey)
